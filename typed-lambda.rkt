@@ -262,7 +262,7 @@
     [(plusE l r) (typecheck-nums l r tenv)]
     [(multE l r) (typecheck-nums l r tenv)]
     [(equalsE l r) (typecheck-equals l r tenv)] ;
-    [(ifE tst thn els) (typecheck-bool tst tenv)] ;
+    [(ifE tst thn els) (typecheck-if tst thn els tenv)] ;
     [(idE n) (type-lookup n tenv)]
     [(lamE n arg-type body)
      (arrowT arg-type
@@ -287,10 +287,23 @@
        [else (type-error r "num")])]
     [else (type-error l "num")]))
 
-(define (typecheck-bool tst tenv)    ;
-  (type-case Type (typecheck tst tenv) ;
-    [(boolT) (boolT)]                ;
-    [else (type-error tst "bool")])) ;
+(define (typecheck-if tst thn els tenv)           ; typechecking for ifE, ask if types of thn and els need to match
+  (type-case Type (typecheck tst tenv)            ;
+    [(boolT)                                      ;
+     (type-case Type (typecheck thn tenv)         ;
+       [(numT)                                    ;
+        (type-case Type (typecheck els tenv)      ;
+          [(numT) (numT)]                         ;
+          [else (type-error els "num")])]         ;
+       [(boolT)                                   ;
+        (type-case Type (typecheck els tenv)      ;
+          [(boolT) (boolT)]                       ;
+          [else (type-error els "bool")])]        ;
+       [(arrowT arg res)                          ;
+        (type-case Type (typecheck els tenv)      ;
+          [(arrowT arg2 res2) (arrowT arg2 res2)] ;
+          [else (type-error els "arrow")])])]     ;
+    [else (type-error tst "bool")]))              ;
 
 (define (typecheck-equals l r tenv)     ; exactly the same as typecheck-nums, but returns boolT
   (type-case Type (typecheck l tenv)    ;
@@ -345,5 +358,34 @@
                        mt-env)
             "no type")
   (test/exn (typecheck (parse `{* {lambda {[x : num]} x} 1})
+                       mt-env)
+            "no type"))
+
+(module+ test ; part 1 tests
+  (test (interp (parse `{if true 4 5})
+                mt-env)
+        (numV 4))
+  (test (interp (parse `{if false 4 5})
+                mt-env)
+        (numV 5))
+  (test (interp (parse `{if {= 13 {if {= 1 {+ -1 2}}
+                                      12
+                                      13}}
+                            4
+                            5})
+                mt-env)
+        (numV 5))
+  (test (typecheck (parse `{= 13 {if {= 1 {+ -1 2}}
+                                     12
+                                     13}})
+                   mt-env)
+        (boolT))
+  (test (typecheck (parse `{if {= 1 {+ -1 2}}
+                               {lambda {[x : num]} {+ x 1}}
+                               {lambda {[y : num]} y}})
+                   mt-env)
+        ;; This result may need to be adjusted after part 3:
+        (arrowT (numT) (numT)))
+  (test/exn (typecheck (parse `{+ 1 {if true true false}})
                        mt-env)
             "no type"))
