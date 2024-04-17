@@ -5,7 +5,9 @@
   (boolV [b : Boolean]) ;
   (closV [arg : Symbol]
          [body : Exp]
-         [env : Env]))
+         [env : Env])
+  (pairV [fst : Exp]   ;
+         [snd : Exp])) ;
 
 (define-type Exp
   (numE [n : Number])
@@ -24,13 +26,19 @@
         [arg-type : Type]
         [body : Exp])
   (appE [fun : Exp]
-        [arg : Exp]))
+        [arg : Exp])
+  (pairE [frst : Exp]  ;
+         [scnd : Exp]) ;
+  (fstE [pr : Exp])    ;
+  (sndE [pr : Exp]))   ;
 
 (define-type Type
   (numT)
   (boolT)
-  (arrowT [arg : Type]
-          [result : Type]))
+  (arrowT [arg : Type]  ; later change to Listof Type
+          [result : Type])
+  (crossT [fst : Type]   ; pair type
+          [snd : Type])) ;
 
 (define-type Binding
   (bind [name : Symbol]
@@ -85,6 +93,13 @@
      (ifE (parse (second (s-exp->list s)))   ;
           (parse (third (s-exp->list s)))    ;
           (parse (fourth (s-exp->list s))))] ;
+    [(s-exp-match? `{pair ANY ANY} s)         ;
+     (pairE (parse (second (s-exp->list s)))  ;
+           (parse (third (s-exp->list s))))]  ;
+    [(s-exp-match? `{fst ANY} s)              ;
+     (fstE (parse (second (s-exp->list s))))] ;
+    [(s-exp-match? `{snd ANY} s)              ;
+     (sndE (parse (second (s-exp->list s))))] ;
     [(s-exp-match? `{ANY ANY} s)
      (appE (parse (first (s-exp->list s)))
            (parse (second (s-exp->list s))))]
@@ -141,11 +156,18 @@
     [(idE s) (lookup s env)]
     [(plusE l r) (num+ (interp l env) (interp r env))]
     [(multE l r) (num* (interp l env) (interp r env))]
-    [(equalsE l r) (num= (interp l env) (interp r env))] ; wrote num= (doesn't work yet)
+    [(equalsE l r) (num= (interp l env) (interp r env))] ; wrote num= 
     [(ifE tst thn els)      ;
      (if (equal? (interp tst env) (boolV #t))  ;
          (interp thn env)   ;
          (interp els env))] ;
+    [(pairE frst scnd) (pairV frst scnd)]              ;
+    [(fstE pr) (type-case Exp pr                       ;
+                 [(pairE frst scnd) (interp frst env)] ;
+                 [else (error 'interp "not a pair")])] ;
+    [(sndE pr) (type-case Exp pr                       ;
+                 [(pairE frst scnd) (interp scnd env)] ;
+                 [else (error 'interp "not a pair")])] ;
     [(lamE n t body)
      (closV n body env)]
     [(appE fun arg) (type-case Value (interp fun env)
@@ -259,16 +281,31 @@
   (type-case Exp a
     [(numE n) (numT)]
     [(boolE b) (boolT)] ;
-    [(plusE l r) (typecheck-nums l r tenv)]
-    [(multE l r) (typecheck-nums l r tenv)]
-    [(equalsE l r) (typecheck-equals l r tenv)] ;
-    [(ifE tst thn els) (typecheck-if tst thn els tenv)] ;
+    [(plusE l r) (typecheck-nums l r tenv (numT))]
+    [(multE l r) (typecheck-nums l r tenv (numT))]
+    [(equalsE l r) (typecheck-nums l r tenv (boolT))] ;
+    [(ifE tst thn els) (type-case Type (typecheck tst tenv)
+                         [(boolT) (local [(define ttype (typecheck thn tenv))
+                                          (define etype (typecheck els tenv))]
+                                    (if (equal? ttype etype)
+                                        ttype
+                                        (type-error els (to-string ttype))))]
+                         [else (type-error tst "bool")])] ;
     [(idE n) (type-lookup n tenv)]
     [(lamE n arg-type body)
      (arrowT arg-type
              (typecheck body 
                         (extend-env (tbind n arg-type)
                                     tenv)))]
+    [(pairE frst scnd) (crossT (typecheck frst tenv) (typecheck scnd tenv))] ;
+    [(fstE pr)
+     (type-case Type (typecheck pr tenv)
+       [(crossT fst snd) fst]
+       [else (type-error pr "pair")])]
+    [(sndE pr)
+     (type-case Type (typecheck pr tenv)
+       [(crossT fst snd) snd]
+       [else (type-error pr "pair")])]
     [(appE fun arg)
      (type-case Type (typecheck fun tenv)
        [(arrowT arg-type result-type)
@@ -279,15 +316,15 @@
                         (to-string arg-type)))]
        [else (type-error fun "function")])]))
 
-(define (typecheck-nums l r tenv)
+(define (typecheck-nums l r tenv resultT) ; changed to pass in expected result type
   (type-case Type (typecheck l tenv)
     [(numT)
      (type-case Type (typecheck r tenv)
-       [(numT) (numT)]
+       [(numT) resultT] ;
        [else (type-error r "num")])]
     [else (type-error l "num")]))
 
-(define (typecheck-if tst thn els tenv)           ; typechecking for ifE, ask if types of thn and els need to match
+#;(define (typecheck-if tst thn els tenv)           ; typechecking for ifE, ask if types of thn and els need to match
   (type-case Type (typecheck tst tenv)            ;
     [(boolT)                                      ;
      (type-case Type (typecheck thn tenv)         ;
@@ -305,13 +342,6 @@
           [else (type-error els "arrow")])])]     ;
     [else (type-error tst "bool")]))              ;
 
-(define (typecheck-equals l r tenv)     ; exactly the same as typecheck-nums, but returns boolT
-  (type-case Type (typecheck l tenv)    ;
-    [(numT)                             ;
-     (type-case Type (typecheck r tenv) ;
-       [(numT) (boolT)]                 ;
-       [else (type-error r "num")])]    ;
-    [else (type-error l "num")]))       ;
 
 (define (type-error a msg)
   (error 'typecheck (string-append
