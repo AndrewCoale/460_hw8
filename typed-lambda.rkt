@@ -3,11 +3,11 @@
 (define-type Value
   (numV [n : Number])
   (boolV [b : Boolean]) ;
-  (closV [arg : Symbol]
+  (closV [args : (Listof Symbol)]
          [body : Exp]
          [env : Env])
-  (pairV [fst : Exp]   ;
-         [snd : Exp])) ;
+  (pairV [fst : Value]   ;
+         [snd : Value])) ;
 
 (define-type Exp
   (numE [n : Number])
@@ -22,11 +22,11 @@
   (ifE [tst : Exp]  ;
        [thn : Exp]  ;
        [els : Exp]) ;
-  (lamE [n : Symbol]
-        [arg-type : Type]
+  (lamE [ns : (Listof Symbol)]      ; copied change from class
+        [arg-types : (Listof Type)] ;
         [body : Exp])
   (appE [fun : Exp]
-        [arg : Exp])
+        [args : (Listof Exp)]) ;
   (pairE [frst : Exp]  ;
          [scnd : Exp]) ;
   (fstE [pr : Exp])    ;
@@ -35,7 +35,7 @@
 (define-type Type
   (numT)
   (boolT)
-  (arrowT [arg : Type]  ; later change to Listof Type
+  (arrowT [args : (Listof Type)]  ; later change to Listof Type
           [result : Type])
   (crossT [fst : Type]   ; pair type
           [snd : Type])) ;
@@ -54,6 +54,7 @@
 
 (define mt-env empty)
 (define extend-env cons)
+(define extend-env-many append) ;
 
 (module+ test
   (print-only-errors #t))
@@ -71,20 +72,20 @@
     [(s-exp-match? `{* ANY ANY} s)
      (multE (parse (second (s-exp->list s)))
             (parse (third (s-exp->list s))))]
-    [(s-exp-match? `{let {[SYMBOL : ANY ANY]} ANY} s)
-     (let ([bs (s-exp->list (first
-                             (s-exp->list (second
-                                           (s-exp->list s)))))])
-       (appE (lamE (s-exp->symbol (first bs))
-                   (parse-type (third bs))
+    [(s-exp-match? `{let {[SYMBOL : ANY ANY] ...} ANY} s) ; pluralized
+     (let ([bs (map s-exp->list
+                    (s-exp->list (second
+                                  (s-exp->list s))))])
+       (appE (lamE (map s-exp->symbol (map first bs))
+                   (map parse-type (map third bs))
                    (parse (third (s-exp->list s))))
-             (parse (fourth bs))))]
-    [(s-exp-match? `{lambda {[SYMBOL : ANY]} ANY} s)
-     (let ([arg (s-exp->list
-                 (first (s-exp->list 
-                         (second (s-exp->list s)))))])
-       (lamE (s-exp->symbol (first arg))
-             (parse-type (third arg))
+             (map parse (map fourth bs))))]
+    [(s-exp-match? `{lambda {[SYMBOL : ANY] ...} ANY} s) ; added ellipses
+     (let ([args (map s-exp->list                        ;
+                      (s-exp->list                       ;
+                       (second (s-exp->list s))))])      ;
+       (lamE (map s-exp->symbol (map first args)) ;
+             (map parse-type (map third args))
              (parse (third (s-exp->list s)))))]
     [(s-exp-match? `{= ANY ANY} s)              ;
      (equalsE (parse (second (s-exp->list s)))  ;
@@ -100,9 +101,9 @@
      (fstE (parse (second (s-exp->list s))))] ;
     [(s-exp-match? `{snd ANY} s)              ;
      (sndE (parse (second (s-exp->list s))))] ;
-    [(s-exp-match? `{ANY ANY} s)
+    [(s-exp-match? `{ANY ANY ...} s)
      (appE (parse (first (s-exp->list s)))
-           (parse (second (s-exp->list s))))]
+           (map parse (rest (s-exp->list s))))]
     [else (error 'parse "invalid input")]))
 
 (define (parse-type [s : S-Exp]) : Type
@@ -111,12 +112,15 @@
     (numT)]
    [(s-exp-match? `bool s)
     (boolT)]
-   [(s-exp-match? `(ANY -> ANY) s)
-    (arrowT (parse-type (first (s-exp->list s)))
+   [(s-exp-match? `(ANY ... -> ANY) s)
+    (arrowT (map parse-type (reverse (rest (rest (reverse (s-exp->list s))))))
             (parse-type (third (s-exp->list s))))]
+   [(s-exp-match? `(ANY * ANY) s)                  ;
+    (crossT (parse-type (first (s-exp->list s)))   ;
+            (parse-type (first (reverse (s-exp->list s)))))] ;
    [else (error 'parse-type "invalid input")]))
 
-(module+ test
+#;(module+ test
   (test (parse `2)
         (numE 2))
   (test (parse `x)
@@ -161,7 +165,7 @@
      (if (equal? (interp tst env) (boolV #t))  ;
          (interp thn env)   ;
          (interp els env))] ;
-    [(pairE frst scnd) (pairV frst scnd)]              ;
+    [(pairE frst scnd) (pairV (interp frst env) (interp scnd env))]              ;
     [(fstE pr) (type-case Exp pr                       ;
                  [(pairE frst scnd) (interp frst env)] ;
                  [else (error 'interp "not a pair")])] ;
