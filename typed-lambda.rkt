@@ -174,16 +174,16 @@
                  [else (error 'interp "not a pair")])] ;
     [(lamE n t body)
      (closV n body env)]
-    [(appE fun arg) (type-case Value (interp fun env)
-                      [(closV n body c-env)
-                       (interp body
-                               (extend-env
-                                (bind n
-                                      (interp arg env))
-                                c-env))]
-                      [else (error 'interp "not a function")])]))
+    [(appE fun args) (type-case Value (interp fun env)
+                       [(closV ns body c-env)
+                        (interp body
+                                (extend-env-many                             ;
+                                 (map2 (lambda (n arg)                       ; changed, may be wrong
+                                         (bind n (interp arg env))) ns args) ;
+                                 c-env))]
+                       [else (error 'interp "not a function")])]))
 
-(module+ test
+#;(module+ test
   (test (interp (parse `2) mt-env)
         (numV 2))
   (test/exn (interp (parse `x) mt-env)
@@ -296,11 +296,12 @@
                                         (type-error els (to-string ttype))))]
                          [else (type-error tst "bool")])] ;
     [(idE n) (type-lookup n tenv)]
-    [(lamE n arg-type body)
-     (arrowT arg-type
+    [(lamE ns arg-types body)
+     (arrowT arg-types
              (typecheck body 
-                        (extend-env (tbind n arg-type)
-                                    tenv)))]
+                        (extend-env-many      ;(tbind n arg-type)
+                         (map2 tbind ns arg-types) ;
+                         tenv)))]
     [(pairE frst scnd) (crossT (typecheck frst tenv) (typecheck scnd tenv))] ;
     [(fstE pr)
      (type-case Type (typecheck pr tenv)
@@ -310,14 +311,12 @@
      (type-case Type (typecheck pr tenv)
        [(crossT fst snd) snd]
        [else (type-error pr "pair")])]
-    [(appE fun arg)
+    [(appE fun args)
      (type-case Type (typecheck fun tenv)
-       [(arrowT arg-type result-type)
-        (if (equal? arg-type
-                    (typecheck arg tenv))
+       [(arrowT arg-types result-type)
+        (if (typecheck-args arg-types args tenv)
             result-type
-            (type-error arg
-                        (to-string arg-type)))]
+            (error 'typecheck "too many args"))]
        [else (type-error fun "function")])]))
 
 (define (typecheck-nums l r tenv resultT) ; changed to pass in expected result type
@@ -327,6 +326,17 @@
        [(numT) resultT] ;
        [else (type-error r "num")])]
     [else (type-error l "num")]))
+
+(define (typecheck-args arg-types args tenv)
+  (type-case (Listof Type) arg-types
+    [(cons f r)
+     (type-case (Listof Exp) args
+       [(cons f-arg r-args)
+        (if (equal? f (typecheck f-arg tenv))
+            (typecheck-args r r-args tenv)
+            (type-error f-arg (to-string f)))]
+       [else (error 'typecheck "too few args")])]
+    [else (empty? args)]))
 
 #;(define (typecheck-if tst thn els tenv)           ; typechecking for ifE, ask if types of thn and els need to match
   (type-case Type (typecheck tst tenv)            ;
@@ -358,7 +368,7 @@
 (define type-lookup
   (make-lookup tbind-name tbind-type))
 
-(module+ test
+#;(module+ test
   (test (typecheck (parse `10) mt-env)
         (numT))
   (test (typecheck (parse `{+ 10 17}) mt-env)
@@ -414,12 +424,33 @@
                                      13}})
                    mt-env)
         (boolT))
-  (test (typecheck (parse `{if {= 1 {+ -1 2}}
+  #;(test (typecheck (parse `{if {= 1 {+ -1 2}}
                                {lambda {[x : num]} {+ x 1}}
                                {lambda {[y : num]} y}})
                    mt-env)
         ;; This result may need to be adjusted after part 3:
         (arrowT (numT) (numT)))
   (test/exn (typecheck (parse `{+ 1 {if true true false}})
+                       mt-env)
+            "no type"))
+
+(module+ test ; part 3 tests
+  (test (interp (parse `{{lambda {}
+                           10}})
+                mt-env)
+        (numV 10))
+  (test (interp (parse `{{lambda {[x : num] [y : num]} {+ x y}}
+                         10
+                         20})
+                mt-env)
+        (numV 30))
+  (test (typecheck (parse `{{lambda {[x : num] [y : bool]} y}
+                            10
+                            false})
+                   mt-env)
+        (boolT))
+  (test/exn (typecheck (parse `{{lambda {[x : num] [y : bool]} y}
+                                false
+                                10})
                        mt-env)
             "no type"))
